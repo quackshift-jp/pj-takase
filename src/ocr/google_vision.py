@@ -6,10 +6,9 @@ import json
 
 CREDENTIAL = service_account.Credentials.from_service_account_file("key.json")
 CLIENT = vision.ImageAnnotatorClient(credentials=CREDENTIAL)
-IMAGE_PATH = "/Users/apple/src/quackshift/pj-takase/src/ocr/請求書0001-1.jpg"
 
 
-def read_image(image_path: str = IMAGE_PATH) -> vision.Image:
+def read_image(image_path: str) -> vision.Image:
     with io.open(image_path, "rb") as image_file:
         content = image_file.read()
 
