@@ -7,15 +7,16 @@ from langchain_core.documents.base import Document
 from langchain.vectorstores.faiss import FAISS
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
+from langchain.llms import OpenAI
+from langchain.prompts import PromptTemplate
 
 load_dotenv(verbose=True)
 
 os.environ["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY")
 FAISS_DB_DIR = "vectorstore"
 
-llm_model = ChatOpenAI(model="gpt-3.5-turbo-1106").bind(
-    response_format={"type": "json_object"}
-)
+
+llm_model = ChatOpenAI(model="gpt-3.5-turbo-1106")
 
 
 def load_text_documents(path: str) -> list[Document]:
@@ -24,7 +25,7 @@ def load_text_documents(path: str) -> list[Document]:
 
 
 def split_documents_to_chunk(documents: list[Document]) -> list[Document]:
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=0)
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=0)
     return text_splitter.split_documents(documents)
 
 
@@ -45,57 +46,56 @@ def get_retrieval_chain(faiss_db: FAISS, llm_model: ChatOpenAI) -> RetrievalQA:
     )
 
 
-def detect_text_error(
+def extract_context(
     ocr_data: dict[str, any], retrieval_chain: RetrievalQA
 ) -> dict[str, str]:
-    """業者記入テキストと事前格納したドキュメントを比較して、エラー検知を行う
-    args:
-    ocr_data dict[str,any]: OCRのテキスト
-    ex)
-        {
-            "物件名": "物件A",
-            "管理会社": "会社A",
-            "賃料": 111,
-            "退去条件": "退去条件A",
-        }
+    
+    template="""
+    {key}に関連する内容をcontextから全て抜き出してください
+    """
+    
+    prompt = PromptTemplate(
+        template=template,
+        input_variables=["key"], 
+    )
+    
+    substracted = {}
+    for key in ocr_data.keys():
+        prompt_text=prompt.format(key=key)
+        response=retrieval_chain({"prompt": prompt_text})
+        substracted[key]=response.get("result")
+    return substracted
 
-    return dict[str,any]: エラー検知結果を報告
-    ex)
-        {
-            "物件名": "結果",
-            "管理会社": "結果",
-            "賃料": "Warning: {正しい内容}ではないですか？",
-            "退去条件":  "Warning: {正しい内容}ではないですか？",
-        }
+def detect_sentence_error(
+    ocr_data: dict[str, any], accurate_data: dict[str, any]
+    ) -> dict[str, str]:
+    
+    llm = OpenAI(temperature=0.0)
+
+    template="""
+    Ocrの内容に該当する部分をContextから抜き出してください。
+    Ocrの内容がContextの内容に含まれない場合「Contextに含まれません」と回答してください。
+
+    出力例：
+    Contextには「○○○○○○○○」と書かれています。
+
+     Ocr：{ocr}
+     Context：{context}
     """
 
-    prompt = f"""
-    contextだけに基づいて回答してください。
-    contextに基づいてもわからない場合は、「検索結果が見つかりませんでした。」と答えてください。
+    prompt = PromptTemplate(
+        template=template,
+        input_variables=["ocr", "context"], 
+    )
 
-    - [質問内容]
-    JSON形式の入力とcontextを比較して、文脈として各項目の入力内容が正しいかを比較してください。
-    「物件名・管理会社・賃料・退去条件」それぞれに対して、「正しく入力されています」または、「文脈または文字が異なっています」または、「検索結果が見つかりませんでした。」で回答するようにしてください。
-    物件名、管理会社、賃料に関してはcontextと同じ文字が入っているかを確認してください。
 
-    - [入力]
-    {ocr_data}
+    error_detection = {}
+    for key in ocr_data.keys():
+        prompt_text=prompt.format(ocr=key+':'+ocr_data[key],context=accurate_data[key])
+        response=llm(prompt_text)
+        error_detection[key]=response
 
-    JSON形式の出力形式を指定します。
-    - [出力形式]
-    {{
-    "output":[
-        {{
-        "物件名": str型,
-        "管理会社": str型,
-        "賃料": str型,
-        "退去条件": str型
-        }},
-    ]
-    }}
-    """
-    response = retrieval_chain({"prompt": prompt})
-    return response
+    return error_detection
 
 
 def main(path: str, ocr_text: str):
@@ -106,4 +106,19 @@ def main(path: str, ocr_text: str):
         faiss_db=FAISS.load_local(FAISS_DB_DIR, embeddings=OpenAIEmbeddings()),
         llm_model=llm_model,
     )
-    return detect_text_error(ocr_text, retrieval_chain)
+    accurate_data=extract_context(ocr_text, retrieval_chain)
+    error=detect_sentence_error(ocr_text, accurate_data)
+    return error
+
+
+if __name__ == "__main__":
+    path = "data/compliance_data"
+    ocr_text = {
+        "退去条件": "乙が甲を退職した場合",
+        "社宅使用料":"全校の支払は、毎月25日（金融機関の休業日はその前日）までに翌月分の使用料を、乙の銀行口座より自動引き落としにて行う。",
+    }
+    result=main(path, ocr_text)
+    print(result)
+
+
+
