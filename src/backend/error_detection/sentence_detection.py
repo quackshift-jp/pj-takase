@@ -73,11 +73,10 @@ def detect_sentence_error(
     llm = OpenAI(temperature=0.0)
 
     template="""
-    Ocrの内容に該当する部分をContextから抜き出してください。
-    Ocrの内容がContextの内容に含まれない場合「Contextに含まれません」と回答してください。
+     Ocrの内容がContextの内容に含まれない場合「社内ドキュメントに含まれません」と回答してください。
 
     出力例：
-    Contextには「○○○○○○○○」と書かれています。
+    社内ドキュメントには「○○○○○○○○」と書かれています。
 
      Ocr：{ocr}
      Context：{context}
